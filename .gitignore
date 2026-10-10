@@ -26,3 +26,7 @@ npm-debug.log*
 
 # typescript
 next-env.d.ts
+
+# Sensitive environment files - do not commit
+.env.*
+!.env.example

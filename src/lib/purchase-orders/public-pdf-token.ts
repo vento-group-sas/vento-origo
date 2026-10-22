@@ -1,14 +1,15 @@
 import crypto from "node:crypto";
 
-const TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+// Public links are short lived; authenticated PDF access remains separate.
+const TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24;
+const MAX_CLOCK_SKEW_SECONDS = 60;
 
 function getSecret(): string {
-  return (
-    process.env.PURCHASE_ORDER_PDF_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    process.env.SESSION_SECRET ||
-    "origo-po-public-pdf-dev-secret"
-  );
+  const secret = process.env.PURCHASE_ORDER_PDF_SECRET?.trim();
+  if (!secret || Buffer.byteLength(secret, "utf8") < 32) {
+    throw new Error("PURCHASE_ORDER_PDF_SECRET must be configured with at least 32 bytes");
+  }
+  return secret;
 }
 
 function sign(poId: string, issuedAtSec: number): string {
@@ -23,19 +24,18 @@ export function createPurchaseOrderPdfToken(poId: string): string {
 }
 
 export function verifyPurchaseOrderPdfToken(poId: string, token: string): boolean {
-  const raw = String(token ?? "").trim();
-  if (!raw) return false;
+  const match = /^([0-9]{10})\.([a-f0-9]{64})$/.exec(String(token ?? "").trim());
+  if (!match) return false;
 
-  const [issuedAtRaw, signatureRaw] = raw.split(".");
-  const issuedAtSec = Number(issuedAtRaw);
-  if (!Number.isFinite(issuedAtSec) || !signatureRaw) return false;
-
+  const issuedAtSec = Number(match[1]);
   const nowSec = Math.floor(Date.now() / 1000);
-  if (Math.abs(nowSec - issuedAtSec) > TOKEN_MAX_AGE_SECONDS) return false;
+  if (issuedAtSec > nowSec + MAX_CLOCK_SKEW_SECONDS ||
+      nowSec - issuedAtSec > TOKEN_MAX_AGE_SECONDS) return false;
 
-  const expected = sign(poId, issuedAtSec);
   try {
-    return crypto.timingSafeEqual(Buffer.from(signatureRaw), Buffer.from(expected));
+    const expected = Buffer.from(sign(poId, issuedAtSec), "hex");
+    const supplied = Buffer.from(match[2], "hex");
+    return expected.length === supplied.length && crypto.timingSafeEqual(supplied, expected);
   } catch {
     return false;
   }
